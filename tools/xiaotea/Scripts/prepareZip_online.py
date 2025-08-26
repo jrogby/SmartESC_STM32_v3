@@ -1,55 +1,60 @@
-#!/usr/bin/python
-from sys import argv, exit
-from os.path import getsize
-from xiaotea import XiaoTea
-import zipfile
-import hashlib
-import time
-import shutil
-import os
+name: C/C++ CI
 
-cry = XiaoTea()
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
 
-source='build/firmware.bin'
-destination='tools/zip_output/FIRM.bin'
-shutil.copyfile(source, destination)
+jobs:
+  build:
 
+    runs-on: ubuntu-latest
+    env:
+      # ruleid: allowed-unsecure-commands
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
 
-hfi = open('tools/zip_output/FIRM.bin', 'rb')
-hfo = open('tools/zip_output/FIRM.bin.enc', 'wb')
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        submodules: recursive
+    - name: log untrusted output
+      run: |
 
-hfo.write(cry.encrypt(hfi.read()))
+        # disable command workflow processing
+        echo "::stop-commands::`echo -n ${{ github.token }} | sha256sum | head -c 64`"
 
-hfo.close()
-hfi.close()
+        # log untrusted output
+        echo "untrusted output"
 
-md5_hash = hashlib.md5()
-with open('tools/zip_output/FIRM.bin',"rb") as f:
-    # Read and update hash in chunks of 4K
-    for byte_block in iter(lambda: f.read(4096),b""):
-        md5_hash.update(byte_block)
-    print(md5_hash.hexdigest())
+        # enable workflow command processing
+        echo "::`echo -n ${{ github.token }} | sha256sum | head -c 64`::"
+    - name: arm-none-eabi-gcc
+      uses: fiam/arm-none-eabi-gcc@v1.0.2
+      with:
+        release: '9-2020-q2'
 
-md5_hash_enc = hashlib.md5()
-with open('tools/zip_output/FIRM.bin.enc',"rb") as f:
-    # Read and update hash in chunks of 4K
-    for byte_block in iter(lambda: f.read(4096),b""):
-        md5_hash_enc.update(byte_block)
-    print(md5_hash_enc.hexdigest())
+    - name: make
+      run: make
 
-version = 'M365_v3_0.1'
-#filename = version + '-' + str(int(time.time())) + '.zip'
-#zip_file = zipfile.ZipFile(filename, 'a', zipfile.ZIP_DEFLATED, False)
+    - uses: actions/setup-python@v2
+      with:
+        python-version: '3.x' # Version range or exact version of a Python version to use, using SemVer's version range syntax
+        architecture: 'x64' # optional x64 or x86. Defaults to x64 if not specified
+    - run: python tools/xiaotea/Scripts/prepareZip_online.py
+    - name: 'Upload Artifact'
+      uses: actions/upload-artifact@v4
+      with:
+        path: ${{ github.workspace }}/tools/zip_output
+        name: M365_v3_build_${{ github.run_number }}
+        retention-days: 5
 
-#zip_file.write('FIRM.bin')
-
-#zip_file.write('FIRM.bin.enc')
-
-
-info_txt = 'dev: M365;\nnam: {};\nenc: B;\ntyp: DRV;\nmd5: {};\nmd5e: {};\n'.format(
-    version, md5_hash.hexdigest(), md5_hash_enc.hexdigest())
-infofile = open('tools/zip_output/info.txt', 'wb')
-infofile.write(info_txt.encode())
-infofile.close()
-#os.remove('FIRM.bin')
-#os.remove('FIRM.bin.enc')
+    - name: Commit new firmware
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git add tools/zip_output/FIRM.bin
+        git add tools/zip_output/FIRM.bin.enc
+        git add tools/zip_output/info.txt
+        git commit -m "Add new firmware build [skip ci]" || echo "No changes to commit"
+        git push
